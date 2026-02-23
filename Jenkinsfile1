@@ -1,7 +1,5 @@
 pipeline {
-    agent{
-        label "jenkins-agent"
-    }
+    agent any
     tools {
         jdk 'Java17'
         nodejs 'node16'
@@ -10,10 +8,11 @@ pipeline {
         SCANNER_HOME = tool 'sonar-scanner'
         APP_NAME = "reddit-clone-pipeline"
         RELEASE = "1.0.0"
-        DOCKER_USER = "veer1522"
+        DOCKER_USER = "devopseasy"
         DOCKER_PASS = 'dockerhub'
         IMAGE_NAME = "${DOCKER_USER}" + "/" + "${APP_NAME}"
         IMAGE_TAG = "${RELEASE}-${BUILD_NUMBER}"
+	JENKINS_API_TOKEN = credentials("JENKINS_API_TOKEN")
     }
     stages {
         stage('clean workspace') {
@@ -23,14 +22,14 @@ pipeline {
         }
         stage('Checkout from Git') {
             steps {
-                git branch: 'main', url: 'https://github.com/madhuveer1895/reddit-clone.git'
+                git branch: 'main', url: 'https://github.com/devops-easy/reddit-clone.git'
             }
         }
         stage("Sonarqube Analysis") {
             steps {
                 withSonarQubeEnv('SonarQube-Server') {
                     sh '''$SCANNER_HOME/bin/sonar-scanner -Dsonar.projectName=Reddit-Clone-CI \
-                    -Dsonar.projectKey=Reddit-Clone-CI'''
+		    -Dsonar.projectKey=Reddit-Clone-CI'''
                 }
             }
         }
@@ -65,18 +64,12 @@ pipeline {
              }
          }
 	 stage("Trivy Image Scan") {
-    steps {
-        script {
-            sh '''
-            docker run --rm \
-              -v /var/run/docker.sock:/var/run/docker.sock \
-              -v $HOME/.cache:/root/.cache \
-              aquasec/trivy image --skip-db-update --timeout 20m --no-progress --scanners vuln --exit-code 0 --severity HIGH,CRITICAL --format table veer1522/reddit-clone-pipeline:latest > trivyimage.txt
-            '''
-        }
-    }
-}
-
+             steps {
+                 script {
+	              sh ('docker run -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy image devopseasy/reddit-clone-pipeline:latest --no-progress --scanners vuln  --exit-code 0 --severity HIGH,CRITICAL --format table > trivyimage.txt')
+                 }
+             }
+         }
 	 stage ('Cleanup Artifacts') {
              steps {
                  script {
@@ -85,5 +78,23 @@ pipeline {
                  }
              }
          }
+	 stage("Trigger CD Pipeline") {
+            steps {
+                script {
+                    sh "curl -v -k --user jenkins:${JENKINS_API_TOKEN} -X POST -H 'cache-control: no-cache' -H 'content-type: application/x-www-form-urlencoded' --data 'IMAGE_TAG=${IMAGE_TAG}' 'http://3.109.143.205:8080/job/Reddit-Clone-CD/buildWithParameters?token=gitops-token'"
+                }
+            }
+         }
     }
+    post {
+        always {
+           emailext attachLog: true,
+               subject: "'${currentBuild.result}'",
+               body: "Project: ${env.JOB_NAME}<br/>" +
+                   "Build Number: ${env.BUILD_NUMBER}<br/>" +
+                   "URL: ${env.BUILD_URL}<br/>",
+               to: 'devopseasy@gmail.com',                              
+               attachmentsPattern: 'trivyfs.txt,trivyimage.txt'
+        }
+     }
 }
